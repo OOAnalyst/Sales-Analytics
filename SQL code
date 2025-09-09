@@ -1,0 +1,150 @@
+-- massages data
+with msg as (
+SELECT
+  DATE_ADD(s.date, INTERVAL es.sent_date DAY) AS date,
+  sp.country AS country,
+  a.send_interval AS sent_interval,
+  a.is_verified as verified,
+  a.is_unsubscribed as unsubscribed,
+  COUNT(es.id_message) AS sent_msg,
+  COUNT(eo.id_message) AS open_msg,
+  COUNT(ev.id_message) AS visit_msg,
+
+
+ FROM `data-analytics-mate.DA.email_sent` es
+ left join `DA.email_open` eo
+ on es.id_message = eo.id_message
+ left join `DA.email_visit` ev
+ on es.id_message = ev.id_message
+ join `DA.account` a
+ on eo.id_account = a.id
+ join `DA.account_session` acs
+ on a.id = acs.account_id
+ join `DA.session` s
+ on acs.ga_session_id = s.ga_session_id
+ join `DA.session_params` sp
+ on s.ga_session_id = sp.ga_session_id
+ group by DATE_ADD(s.date, INTERVAL es.sent_date DAY) ,
+  sp.country ,
+  a.send_interval,
+  a.is_verified,
+  a.is_unsubscribed
+),
+-- Accounts data
+account as (
+SELECT
+    s.date AS date,
+    sp.country AS country,
+    a.send_interval AS sent_interval,
+    a.is_verified as verified,
+    a.is_unsubscribed as unsubscribed,
+    COUNT (distinct a.id) AS account_count,
+   
+
+
+  FROM `DA.account` a
+  JOIN `DA.account_session` acs
+    ON a.id = acs.account_id
+  JOIN `DA.session` s
+    ON acs.ga_session_id = s.ga_session_id
+  JOIN `DA.session_params` sp
+    ON acs.ga_session_id = sp.ga_session_id
+  GROUP BY
+    s.date,
+    sp.country,
+    a.send_interval,
+    a.is_verified,
+    a.is_unsubscribed
+   
+),
+-- data concatenation
+ union_data as (
+
+
+  select
+  m.date as date,
+  m.country as country,
+  m.sent_interval as sent_interval,
+  m.verified as verified,
+  m.unsubscribed as unsubscribed,
+  m.sent_msg as sent_msg,
+  m.open_msg as open_msg,
+  m.visit_msg as visit_msg,
+  0 as account_count
+  from msg m
+
+
+  union all
+
+
+  select
+  a.date as date,
+  a.country as country,
+  a.sent_interval as sent_interval,
+  a.verified as verified,
+  a.unsubscribed as unsubscribed,
+  0 as sent_msg,
+  0 as open_msg,
+  0 as visit_msg,
+  a.account_count as account_count
+
+
+  from account a
+ ),
+
+ --additional metrics (total_country_account_cnt,total_country_sent_cnt)
+  all_data as (
+select
+date,
+country,
+sent_interval,
+verified,
+unsubscribed,
+sent_msg,
+open_msg,
+visit_msg,
+account_count,
+sum(account_count) over (partition by country) as total_country_account_cnt,
+sum(sent_msg) over (partition by country) as total_country_sent_cnt
+
+
+from union_data ud
+ ),
+ -- Ranking
+ all_data_rank as (
+select
+  date,
+  country,
+  sent_interval,
+  verified,
+  unsubscribed,
+  sent_msg,
+  open_msg,
+  visit_msg,
+  account_count,
+  total_country_account_cnt,
+  total_country_sent_cnt,
+  dense_rank() over(order by total_country_account_cnt desc) as rank_total_country_account_cnt,
+  dense_rank() over(order by total_country_sent_cnt desc) as rank_total_country_sent_cnt
+ from all_data ad
+ )
+ -- main "select"
+ select
+  date,
+  country,
+  sent_interval,
+  verified,
+  unsubscribed,
+  sent_msg,
+  open_msg,
+  visit_msg,
+  account_count,
+  total_country_account_cnt,
+  total_country_sent_cnt,
+  rank_total_country_account_cnt,
+  rank_total_country_sent_cnt
+ from all_data_rank
+-- filtering
+ where rank_total_country_account_cnt <= 10 or rank_total_country_sent_cnt <= 10
+
+
